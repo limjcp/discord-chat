@@ -18,6 +18,12 @@ import random
 import google.generativeai as genai
 import os
 import re
+import webbrowser
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.firefox import GeckoDriverManager
+import psutil  # Add this import at the top
 
 # Gemini API configuration
 # You'll need to get a free API key from https://aistudio.google.com/app/apikey
@@ -86,6 +92,25 @@ class BotApp:
         model_entry = ttk.Entry(control_frame, textvariable=self.model_var, width=20)
         model_entry.grid(row=1, column=3, padx=5)
         
+        # Browser Selection
+        ttk.Label(control_frame, text="Browser:").grid(row=2, column=2, padx=5)
+        self.browser_var = tk.StringVar(value="Edge")
+        browser_dropdown = ttk.Combobox(control_frame, textvariable=self.browser_var, 
+                                        values=["Auto", "Edge", "Chrome", "Firefox"], width=10)
+        browser_dropdown.grid(row=2, column=3, padx=5)
+        
+        # Add Language Selection
+        ttk.Label(control_frame, text="Language:").grid(row=3, column=2, padx=5)
+        self.language_var = tk.StringVar(value="Tagalog")
+        language_dropdown = ttk.Combobox(control_frame, textvariable=self.language_var, 
+                                        values=["Tagalog", "Bisaya"], width=10)
+        language_dropdown.grid(row=3, column=3, padx=5)
+        
+        # Kill Browsers button
+        self.kill_browsers_btn = ttk.Button(control_frame, text="Stop All Browsers", 
+                                          command=self.kill_browser_processes)
+        self.kill_browsers_btn.grid(row=0, column=4, padx=5)  # Add next to other buttons
+        
         # Status Indicators
         status_frame = ttk.Frame(self.root, padding="10")
         status_frame.grid(row=1, column=0, sticky="w")
@@ -110,12 +135,12 @@ class BotApp:
         ttk.Label(server_frame, text="Server ID:").grid(row=0, column=0, sticky="w")
         self.server_id_entry = ttk.Entry(server_frame, width=25)
         self.server_id_entry.grid(row=0, column=1, padx=5)
-        self.server_id_entry.insert(0, "1296738817117655080")  # Example ID
+        self.server_id_entry.insert(0, "1332142278935838783")  # Example ID
         
         ttk.Label(server_frame, text="Channel ID:").grid(row=1, column=0, sticky="w")
         self.channel_id_entry = ttk.Entry(server_frame, width=25)
         self.channel_id_entry.grid(row=1, column=1, padx=5)
-        self.channel_id_entry.insert(0, "1296738817784414240")  # Example ID
+        self.channel_id_entry.insert(0, "1338512638480617492")  # Example ID
         
         ttk.Label(server_frame, text="Ignore Usernames:").grid(row=2, column=0, sticky="w")
         self.owner_username_entry = ttk.Entry(server_frame, width=25)
@@ -140,7 +165,34 @@ class BotApp:
         )
         help_text.grid(row=4, column=0, columnspan=2, pady=5)
 
+    def kill_browser_processes(self):
+        """Kill all running browser processes"""
+        browsers = {
+            'chrome.exe': 'Chrome',
+            'firefox.exe': 'Firefox',
+            'msedge.exe': 'Edge'
+        }
+        
+        killed = []
+        for proc in psutil.process_iter(['name']):
+            try:
+                if proc.info['name'].lower() in browsers:
+                    proc.kill()
+                    killed.append(browsers[proc.info['name'].lower()])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        if killed:
+            print(f"Stopped running browsers: {', '.join(killed)}")
+        return killed
+
     def start_bot(self):
+        # First check and kill any running browsers
+        killed = self.kill_browser_processes()
+        if killed:
+            # Add a small delay to ensure browsers are fully closed
+            time.sleep(2)
+            
         # Configure Gemini API
         api_key = self.api_key_var.get().strip()
         if not api_key:
@@ -187,9 +239,22 @@ class BotApp:
             except:
                 author = "Unknown"
                 
-            # Get message text
+            # Get message text - specifically target the main message content, not replied content
             try:
-                message = last_container.find_element(By.CSS_SELECTOR, "div[id^='message-content-']").text
+                # First try to find the actual message content, excluding any replied content
+                message_elements = last_container.find_elements(By.CSS_SELECTOR, "div[id^='message-content-']")
+                if message_elements:
+                    # Get the last message element (actual message, not the reply)
+                    message = message_elements[-1].text
+                    
+                    # If there's a reply reference, it might be in a different element
+                    reply_elements = last_container.find_elements(By.CSS_SELECTOR, "div[class*='repliedMessage']")
+                    if reply_elements:
+                        # Remove any reply text from the message if it exists
+                        reply_text = reply_elements[0].text
+                        message = message.replace(reply_text, '').strip()
+                else:
+                    message = ""
             except:
                 message = ""
                 
@@ -198,26 +263,93 @@ class BotApp:
             print(f"Error finding messages: {e}")
             return None, None
 
+    def detect_default_browser(self):
+        """Attempt to detect the default browser on the system"""
+        try:
+            # Get the default browser command
+            browser_path = webbrowser.get().name
+            
+            # Check which browser is default based on path
+            browser_path = browser_path.lower()
+            if 'chrome' in browser_path:
+                return "Chrome"
+            elif 'firefox' in browser_path or 'mozilla' in browser_path:
+                return "Firefox"
+            elif 'edge' in browser_path or 'msedge' in browser_path:
+                return "Edge"
+            else:
+                print(f"Unrecognized default browser: {browser_path}")
+                return "Edge"  # Default fallback
+        except Exception as e:
+            print(f"Error detecting default browser: {e}")
+            return "Edge"  # Default fallback
+
     def run_bot(self):
         try:
-            # Configure Edge to use default profile
-            edge_options = Options()
-            edge_options.use_chromium = True
-            edge_options.add_argument("--user-data-dir=C:/Users/klwj/AppData/Local/Microsoft/Edge/User Data")
-            edge_options.add_argument("--profile-directory=Default")
-            edge_options.add_argument("--remote-allow-origins=*")
-            edge_options.add_argument("--no-first-run")
-            edge_options.add_argument("--no-default-browser-check")
-            edge_options.add_argument("--disable-extensions")
-            edge_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            # Auto-detect browser if option is selected
+            if self.browser_var.get() == "Auto":
+                browser_choice = self.detect_default_browser()
+                print(f"Detected default browser: {browser_choice}")
+            else:
+                browser_choice = self.browser_var.get()
             
-            # Initialize driver
-            service = Service(EdgeChromiumDriverManager().install())
-            self.driver = webdriver.Edge(
-                service=service,
-                options=edge_options
-            )
-            self.login_status.config(text="Logged In: Yes (Existing Session)")
+            # Configure browser options based on selection
+            if browser_choice == "Edge":
+                # Edge configuration
+                browser_options = Options()
+                browser_options.use_chromium = True
+                browser_options.add_argument("--user-data-dir=C:/Users/klwj/AppData/Local/Microsoft/Edge/User Data")
+                browser_options.add_argument("--profile-directory=Default")
+                driver_manager = EdgeChromiumDriverManager().install()
+                self.driver = webdriver.Edge(
+                    service=Service(driver_manager),
+                    options=browser_options
+                )
+                
+            elif browser_choice == "Chrome":
+                # Chrome configuration
+                browser_options = ChromeOptions()
+                browser_options.add_argument("--user-data-dir=C:/Users/klwj/AppData/Local/Google/Chrome/User Data")
+                browser_options.add_argument("--profile-directory=Default")
+                driver_manager = ChromeDriverManager().install()
+                self.driver = webdriver.Chrome(
+                    service=Service(driver_manager),
+                    options=browser_options
+                )
+                
+            elif browser_choice == "Firefox":
+                # Firefox configuration
+                browser_options = FirefoxOptions()
+                browser_options.add_argument("-profile")
+                browser_options.add_argument("C:/Users/klwj/AppData/Roaming/Mozilla/Firefox/Profiles/default")
+                driver_manager = GeckoDriverManager().install()
+                self.driver = webdriver.Firefox(
+                    service=Service(driver_manager),
+                    options=browser_options
+                )
+                
+            else:
+                # Fallback to Edge
+                print(f"Unknown browser '{browser_choice}', falling back to Edge")
+                browser_options = Options()
+                browser_options.use_chromium = True
+                driver_manager = EdgeChromiumDriverManager().install()
+                self.driver = webdriver.Edge(
+                    service=Service(driver_manager),
+                    options=browser_options
+                )
+                
+            # Common browser options
+            if hasattr(browser_options, "add_argument"):
+                browser_options.add_argument("--remote-allow-origins=*")
+                browser_options.add_argument("--no-first-run")
+                browser_options.add_argument("--no-default-browser-check")
+                browser_options.add_argument("--disable-extensions")
+                
+            if hasattr(browser_options, "add_experimental_option"):
+                browser_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            
+            self.login_status.config(text=f"Logged In: Yes (Existing {browser_choice} Session)")
             
             server_id = self.server_id_entry.get().strip()
             channel_id = self.channel_id_entry.get().strip()
@@ -319,19 +451,44 @@ class BotApp:
                     else:
                         # Use Gemini for response generation
                         try:
-                            # Create Filipino system prompt
-                            filipino_prompt = """Ikaw ay isang Filipino chatbot na palaging sumasagot sa Filipino lang, kahit ano pa ang wika ng user.
-                            Gumamit ng maraming Filipino slang at casual na pananalita katulad ng 'lodi', 'bes', 'awit', 'petmalu', etc.
-                            Kung hindi mo maintindihan ang message, sabihin mo 'Di ko gets, bes. Pwede paexplain?'
-                            Dapat lahat ng sagot mo ay Filipino lang, huwag mag-English.
-                            Ang mga sagot mo ay dapat maikli at casual lang.
-                            """
-                            
+                            # Select prompt based on language choice
+                            if self.language_var.get() == "Bisaya":
+                                prompt = """ikaw kay normal nga tawo nga bisaya nga nag chat sa social media dili ka AI o robot
+ayaw g yud pag angkon nga ikaw AI chatbot o bisan unsa nga ingon ana
+kung pangutan-on ka bahin sa imong pagka AI i-divert ang topic o ingna nga wa ka kasabot ngano iya ka gipangutana
+gamit ug daghang bisaya slang ug casual nga sinultian parehas sa 'dong' 'bai' 'sus' 'ay' etc
+tanan nimo reply kay lowercase ra ayaw gamita ang capital letters bisan sa start sa sentence
+ayaw gamit ug comma period ug uban pa nga punctuation marks gawas sa question mark kung nangutana
+tangtanga ang ubang letra sa mga pulong parehas sa 'wla' imbis 'wala' 'lng' imbis 'lang' 'kna' imbis 'kana' 'ng' imbis 'nga'
+paghimo ug natural nga typo usahay parehas sa hende imbis hindi
+kanunay super mubo ra imong tubag 3-5 ka words ra o fragment ra parehas sa 'sge dong' 'aw okay' 'mao ba' 'g'
+likayan ang paggamit ug complete sentences fragment o pipila ka words ra
+kung wa ka kasabot sa message ingna 'ha? unsa man' o 'ha?' o 'di ko kasabot bai'
+tanan nimo tubag kay bisaya ra ayaw mag english
+gamita ang mga expression parehas sa 'haha' 'lel' 'sos' 'ay' 'yawa' para mas tinuod"""
+                            else:  # Default to Tagalog
+                                prompt = """ikaw ay isang normal na taong pinoy na nakikipag-usap sa social media hindi isang ai o robot
+huwag kailanman aminin na ikaw ay ai chatbot o anumang ganitong uri
+kung tinanong ka tungkol sa pagiging ai mo i-divert ang usapan o sabihin mo na hindi mo gets kung bakit niya itinatanong iyon
+gumamit ng maraming filipino slang at casual na pananalita katulad ng 'lods' 'par' 'awit' 'paldo' etc
+lahat ng sagot mo ay dapat lowercase lang wag kang gumamit ng capital letters kahit sa simula ng pangungusap
+huwag gumamit ng mga comma period at iba pang punctuation marks maliban sa question mark kung nagtatanong
+alisin ang ilang letra sa mga salita tulad ng 'wla' imbes na 'wala' 'lng' imbes na 'lang' 'ksi' imbes na 'kasi' 'pra' imbes na 'para' 'ung' imbes na 'yung'
+gumawa ng mga natural na typo minsan tulad ng hinding imbes na hindi at iba pa
+palaging super ikli lang ang sagot mo 3-5 words lang minsan o kahit fragments lang tulad ng 'sge lods' 'ayos yan' 'sana ol' 'g'
+iwasan ang gumamit ng buong sentences palaging fragment o ilang words lang
+kung hindi mo maintindihan ang message sabihin mo 'di ko gets par' o 'ha?' o 'ano un'
+dapat lahat ng sagot mo ay filipino lang huwag mag-english
+gamitin yung mga expression katulad ng 'haha' 'lel' 'ows' 'sheeet' 'gagi' para mas mukhang totoo"""
+
                             print(f"Sending request to Gemini API...")
                             
+                            # Set initial chat message based on language
+                            initial_message = "g bai sge unya" if self.language_var.get() == "Bisaya" else "g lods sge later"
+                            
                             chat = self.model.start_chat(history=[
-                                {"role": "user", "parts": [filipino_prompt]},
-                                {"role": "model", "parts": ["Oo naman, bes! Gagawin ko yan. Tagalog lang ako magsasalita, promise!"]}
+                                {"role": "user", "parts": [prompt]},
+                                {"role": "model", "parts": [initial_message]}
                             ])
                             
                             response = chat.send_message(new_message)
